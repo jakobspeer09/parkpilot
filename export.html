@@ -7,13 +7,15 @@
 <style>
 :root { --bg: #fffdf7; --fg: #15323b; --muted: #5a6b70; --accent: #0b6e63; --line: #e6dfcf; color-scheme: light; }
 @media (prefers-color-scheme: dark) { :root { --bg: #132229; --fg: #e9f2f1; --muted: #9fb3b5; --accent: #12907f; --line: #29404a; color-scheme: dark; } }
+[hidden] { display: none !important; }
 body { margin: 0; background: var(--bg); color: var(--fg); font: 16px/1.5 system-ui, -apple-system, sans-serif; }
 main { max-width: 480px; margin: 0 auto; padding: calc(32px + env(safe-area-inset-top, 0px)) max(20px, env(safe-area-inset-right, 0px)) 40px max(20px, env(safe-area-inset-left, 0px)); display: flex; flex-direction: column; gap: 16px; }
 h1 { margin: 0; font-size: 28px; }
 p { margin: 0; color: var(--muted); }
 button, a.btn { display: flex; align-items: center; justify-content: center; height: 54px; border: 0; border-radius: 999px; background: var(--accent); color: #fff; font: 700 17px system-ui, sans-serif; text-decoration: none; }
+button.alt { background: transparent; color: var(--accent); border: 2px solid var(--accent); }
 button:disabled { opacity: .5; }
-#status { padding: 14px 16px; border: 1px solid var(--line); border-radius: 16px; color: var(--fg); min-height: 24px; }
+#status { padding: 14px 16px; border: 1px solid var(--line); border-radius: 16px; color: var(--fg); white-space: pre-line; font-size: 15px; }
 </style>
 </head>
 <body>
@@ -24,10 +26,11 @@ button:disabled { opacity: .5; }
   <div id="status">Bereit.</div>
   <button type="button" id="share" hidden>Datei teilen / sichern</button>
   <a id="dl" class="btn" hidden download="parkdaten.json">Datei herunterladen</a>
+  <button type="button" id="cache" class="alt" hidden>Gespeicherte App-Daten verwenden</button>
 </main>
 <script>
 const BB = "48.255,7.700,48.278,7.745";
-const Q = `[out:json][timeout:180];
+const Q = `[out:json][timeout:120];
 (
   way[highway](${BB});
   nwr[building](${BB});
@@ -41,44 +44,76 @@ const Q = `[out:json][timeout:180];
   nwr[attraction](${BB});
   nwr[amenity](${BB});
   nwr[shop](${BB});
-  nwr[railway](${BB});
+  way[railway](${BB});
+  node[railway](${BB});
   nwr[roller_coaster](${BB});
-  nwr[public_transport](${BB});
   way[barrier](${BB});
   node[entrance](${BB});
   nwr[man_made](${BB});
   nwr["area:highway"](${BB});
-  nwr[place](${BB});
-  nwr[historic](${BB});
-  relation[route](${BB});
 );
-out geom;`;
+out geom qt;`;
 const EP = ["https://overpass-api.de/api/interpreter", "https://overpass.private.coffee/api/interpreter", "https://maps.mail.ru/osm/tools/overpass/api/interpreter", "https://overpass.kumi.systems/api/interpreter"];
 const st = document.getElementById("status");
 let file = null;
+const mb = (n) => (n / 1048576).toFixed(1).replace(".", ",") + " MB";
+
+function offer(blob, name, note) {
+  file = new File([blob], name, { type: "application/json" });
+  st.textContent = `Fertig: ${mb(blob.size)}${note ? " (" + note + ")" : ""}.\nJetzt sichern und im Chat anhängen.`;
+  const a = document.getElementById("dl"); a.href = URL.createObjectURL(blob); a.download = name; a.hidden = false;
+  if (navigator.canShare && navigator.canShare({ files: [file] })) document.getElementById("share").hidden = false;
+}
+
 document.getElementById("go").onclick = async (ev) => {
   ev.target.disabled = true;
+  const errs = [];
   for (const url of EP) {
+    const host = new URL(url).host;
     try {
-      st.textContent = "Verbinde mit " + new URL(url).host + " …";
-      const r = await fetch(url, { method: "POST", body: "data=" + encodeURIComponent(Q), headers: { "Content-Type": "application/x-www-form-urlencoded" } });
-      if (!r.ok) throw new Error("HTTP " + r.status);
+      st.textContent = "Verbinde mit " + host + " …";
+      const ctl = new AbortController(); const tm = setTimeout(() => ctl.abort(), 150000);
+      const r = await fetch(url, { method: "POST", body: "data=" + encodeURIComponent(Q), headers: { "Content-Type": "application/x-www-form-urlencoded" }, signal: ctl.signal });
+      if (!r.ok) { clearTimeout(tm); throw new Error("HTTP " + r.status); }
       const rd = r.body.getReader(), parts = []; let n = 0;
-      for (;;) { const { done, value } = await rd.read(); if (done) break; parts.push(value); n += value.length; st.textContent = "Lade … " + (n / 1048576).toFixed(1).replace(".", ",") + " MB"; }
+      for (;;) { const { done, value } = await rd.read(); if (done) break; parts.push(value); n += value.length; st.textContent = "Lade von " + host + " … " + mb(n); }
+      clearTimeout(tm);
       const blob = new Blob(parts, { type: "application/json" });
-      const txt = await blob.slice(0, 200).text();
-      if (!txt.includes("elements")) throw new Error("unerwartete Antwort");
-      file = new File([blob], "parkdaten.json", { type: "application/json" });
-      st.textContent = "Fertig: " + (n / 1048576).toFixed(1).replace(".", ",") + " MB. Jetzt sichern und im Chat anhängen.";
-      const a = document.getElementById("dl"); a.href = URL.createObjectURL(blob); a.hidden = false;
-      if (navigator.canShare && navigator.canShare({ files: [file] })) document.getElementById("share").hidden = false;
+      const head = await blob.slice(0, 400).text();
+      if (!head.includes('"elements"')) throw new Error("unerwartete Antwort");
+      offer(blob, "parkdaten.json");
       return;
-    } catch (e) { st.textContent = new URL(url).host + ": " + e.message + " – versuche nächsten Server …"; }
+    } catch (e) { errs.push(host + ": " + (e.name === "AbortError" ? "Zeitüberschreitung" : e.message)); }
   }
-  st.textContent = "Kein Server hat geantwortet. Bitte in ein paar Minuten nochmal versuchen.";
+  st.textContent = "Kein Server hat geantwortet:\n" + errs.join("\n") + "\n\nDu kannst es gleich nochmal versuchen oder die gespeicherten App-Daten verwenden.";
   ev.target.disabled = false;
 };
-document.getElementById("share").onclick = async () => { try { await navigator.share({ files: [file], title: "parkdaten.json" }); } catch (e) {} };
+
+// fallback: data the app already cached on this phone (IndexedDB, same site)
+function readCache() {
+  return new Promise((res) => {
+    try {
+      const r = indexedDB.open("parkpilot", 1);
+      r.onupgradeneeded = () => { r.transaction.abort(); res(null); };
+      r.onerror = () => res(null);
+      r.onsuccess = () => {
+        try {
+          const db = r.result;
+          if (!db.objectStoreNames.contains("data")) return res(null);
+          const q = db.transaction("data").objectStore("data").get("park-v1");
+          q.onsuccess = () => res(q.result || null); q.onerror = () => res(null);
+        } catch (e) { res(null); }
+      };
+    } catch (e) { res(null); }
+  });
+}
+readCache().then((d) => {
+  if (!d) return;
+  const b = document.getElementById("cache");
+  b.hidden = false;
+  b.onclick = () => offer(new Blob([JSON.stringify(d)], { type: "application/json" }), "parkdaten_app.json", "aus der App");
+});
+document.getElementById("share").onclick = async () => { try { await navigator.share({ files: [file], title: file.name }); } catch (e) {} };
 </script>
 </body>
 </html>
