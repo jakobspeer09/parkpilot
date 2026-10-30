@@ -1,0 +1,84 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Parkdaten holen</title>
+<style>
+:root { --bg: #fffdf7; --fg: #15323b; --muted: #5a6b70; --accent: #0b6e63; --line: #e6dfcf; color-scheme: light; }
+@media (prefers-color-scheme: dark) { :root { --bg: #132229; --fg: #e9f2f1; --muted: #9fb3b5; --accent: #12907f; --line: #29404a; color-scheme: dark; } }
+body { margin: 0; background: var(--bg); color: var(--fg); font: 16px/1.5 system-ui, -apple-system, sans-serif; }
+main { max-width: 480px; margin: 0 auto; padding: calc(32px + env(safe-area-inset-top, 0px)) max(20px, env(safe-area-inset-right, 0px)) 40px max(20px, env(safe-area-inset-left, 0px)); display: flex; flex-direction: column; gap: 16px; }
+h1 { margin: 0; font-size: 28px; }
+p { margin: 0; color: var(--muted); }
+button, a.btn { display: flex; align-items: center; justify-content: center; height: 54px; border: 0; border-radius: 999px; background: var(--accent); color: #fff; font: 700 17px system-ui, sans-serif; text-decoration: none; }
+button:disabled { opacity: .5; }
+#status { padding: 14px 16px; border: 1px solid var(--line); border-radius: 16px; color: var(--fg); min-height: 24px; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Parkdaten holen</h1>
+  <p>Lädt die öffentlichen OpenStreetMap-Daten rund um den Europa-Park und speichert sie als Datei, damit du sie im Chat anhängen kannst.</p>
+  <button type="button" id="go">Daten laden</button>
+  <div id="status">Bereit.</div>
+  <button type="button" id="share" hidden>Datei teilen / sichern</button>
+  <a id="dl" class="btn" hidden download="parkdaten.json">Datei herunterladen</a>
+</main>
+<script>
+const BB = "48.255,7.700,48.278,7.745";
+const Q = `[out:json][timeout:180];
+(
+  way[highway](${BB});
+  nwr[building](${BB});
+  nwr["building:part"](${BB});
+  nwr[landuse](${BB});
+  nwr[natural](${BB});
+  nwr[leisure](${BB});
+  nwr[water](${BB});
+  nwr[waterway](${BB});
+  nwr[tourism](${BB});
+  nwr[attraction](${BB});
+  nwr[amenity](${BB});
+  nwr[shop](${BB});
+  nwr[railway](${BB});
+  nwr[roller_coaster](${BB});
+  nwr[public_transport](${BB});
+  way[barrier](${BB});
+  node[entrance](${BB});
+  nwr[man_made](${BB});
+  nwr["area:highway"](${BB});
+  nwr[place](${BB});
+  nwr[historic](${BB});
+  relation[route](${BB});
+);
+out geom;`;
+const EP = ["https://overpass-api.de/api/interpreter", "https://overpass.private.coffee/api/interpreter", "https://maps.mail.ru/osm/tools/overpass/api/interpreter", "https://overpass.kumi.systems/api/interpreter"];
+const st = document.getElementById("status");
+let file = null;
+document.getElementById("go").onclick = async (ev) => {
+  ev.target.disabled = true;
+  for (const url of EP) {
+    try {
+      st.textContent = "Verbinde mit " + new URL(url).host + " …";
+      const r = await fetch(url, { method: "POST", body: "data=" + encodeURIComponent(Q), headers: { "Content-Type": "application/x-www-form-urlencoded" } });
+      if (!r.ok) throw new Error("HTTP " + r.status);
+      const rd = r.body.getReader(), parts = []; let n = 0;
+      for (;;) { const { done, value } = await rd.read(); if (done) break; parts.push(value); n += value.length; st.textContent = "Lade … " + (n / 1048576).toFixed(1).replace(".", ",") + " MB"; }
+      const blob = new Blob(parts, { type: "application/json" });
+      const txt = await blob.slice(0, 200).text();
+      if (!txt.includes("elements")) throw new Error("unerwartete Antwort");
+      file = new File([blob], "parkdaten.json", { type: "application/json" });
+      st.textContent = "Fertig: " + (n / 1048576).toFixed(1).replace(".", ",") + " MB. Jetzt sichern und im Chat anhängen.";
+      const a = document.getElementById("dl"); a.href = URL.createObjectURL(blob); a.hidden = false;
+      if (navigator.canShare && navigator.canShare({ files: [file] })) document.getElementById("share").hidden = false;
+      return;
+    } catch (e) { st.textContent = new URL(url).host + ": " + e.message + " – versuche nächsten Server …"; }
+  }
+  st.textContent = "Kein Server hat geantwortet. Bitte in ein paar Minuten nochmal versuchen.";
+  ev.target.disabled = false;
+};
+document.getElementById("share").onclick = async () => { try { await navigator.share({ files: [file], title: "parkdaten.json" }); } catch (e) {} };
+</script>
+</body>
+</html>
